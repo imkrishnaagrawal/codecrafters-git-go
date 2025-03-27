@@ -11,6 +11,33 @@ import (
 	"path"
 )
 
+func readContentFromSha(sha string) ([]byte, error) {
+	filepath := path.Join(".git", "objects", sha[:2], sha[2:])
+	file, err := os.Open(filepath)
+	if err != nil {
+		return []byte{0}, err
+	}
+	defer file.Close()
+
+	fileContent, err := io.ReadAll(file)
+	if err != nil {
+		return []byte{0}, err
+	}
+
+	reader, err := zlib.NewReader(bytes.NewReader(fileContent))
+	if err != nil {
+		return []byte{0}, err
+	}
+	defer reader.Close()
+
+	decompressedContent, err := io.ReadAll(reader)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return decompressedContent, nil
+}
+
 // Usage: your_program.sh <command> <arg1> <arg2> ...
 func main() {
 
@@ -36,32 +63,13 @@ func main() {
 		fmt.Println("Initialized git directory")
 	case "cat-file":
 		sha := os.Args[3]
-		filepath := path.Join(".git", "objects", sha[:2], sha[2:])
-		file, err := os.Open(filepath)
-		if err != nil {
-			log.Fatal("Unable to read file")
-		}
-		defer file.Close()
-
-		fileContent, err := io.ReadAll(file)
+		data, err := readContentFromSha(sha)
 		if err != nil {
 			log.Fatal(err)
 		}
-
-		reader, err := zlib.NewReader(bytes.NewReader(fileContent))
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer reader.Close()
-
-		decompressedContent, err := io.ReadAll(reader)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		results := bytes.SplitN(decompressedContent, []byte{0}, 2)
-
+		results := bytes.SplitN(data, []byte{0}, 2)
 		fmt.Print(string(results[1]))
+
 	case "hash-object":
 		filepath := os.Args[3]
 
@@ -118,8 +126,24 @@ func main() {
 		}
 
 		fmt.Printf("%s\n", shaCode)
+
+	case "ls-tree":
+		sha := os.Args[3]
+
+		data, err := readContentFromSha(sha)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		tree := bytes.Split(data, []byte{0})
+
+		for i := 1; i < len(tree)-1; i++ {
+			fmt.Printf("%s\n", bytes.Split(tree[i], []byte{32})[1])
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command %s\n", command)
 		os.Exit(1)
 	}
 }
+
+// <mode> <name>\0<20_byte_sha><mode> <name>\0<20_byte_sha>
