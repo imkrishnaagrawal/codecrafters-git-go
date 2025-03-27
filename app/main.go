@@ -171,7 +171,7 @@ func computeHashAndStoreObject(headerBytes []byte, fileContent []byte) (string, 
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "usage: mygit <command> [<args>...]\n")
+		fmt.Fprintf(os.Stderr, "usage: ./your_program.sh <command> [<args>...]\n")
 		os.Exit(1)
 	}
 
