@@ -58,7 +58,7 @@ func main() {
 			log.Fatal(err)
 		}
 
-		results := bytes.Split(decompressedContent, []byte{0})
+		results := bytes.SplitN(decompressedContent, []byte{0}, 2)
 
 		fmt.Print(string(results[1]))
 
