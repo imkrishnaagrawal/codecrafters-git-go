@@ -60,7 +60,7 @@ func main() {
 
 		results := bytes.Split(decompressedContent, []byte{0})
 
-		fmt.Println(string(results[1]))
+		fmt.Print(string(results[1]))
 
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command %s\n", command)
