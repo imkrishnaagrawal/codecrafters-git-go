@@ -9,11 +9,14 @@ import (
 	"log"
 	"os"
 	"path"
+	"path/filepath"
+	"sort"
 	"strconv"
 )
 
 const (
 	SHA1HashLength = 20
+	GIT_DIR        = ".git"
 )
 
 type Mode int
@@ -32,6 +35,17 @@ const (
 	BLOB ObjectType = "blob"
 )
 
+type TreeEntry struct {
+	mode     Mode
+	object   ObjectType
+	sha1Hash []byte
+	name     string
+}
+
+type Tree struct {
+	entries []TreeEntry
+}
+
 func stringToObjectType(str string) (ObjectType, error) {
 	switch str {
 	case "tree":
@@ -43,15 +57,8 @@ func stringToObjectType(str string) (ObjectType, error) {
 	}
 }
 
-type TreeEntry struct {
-	mode     Mode
-	object   ObjectType
-	sha1Hash string
-	name     string
-}
-
 func readContentFromSha(sha1Hash string) ([]byte, error) {
-	filepath := path.Join(".git", "objects", sha1Hash[:2], sha1Hash[2:])
+	filepath := path.Join(GIT_DIR, "objects", sha1Hash[:2], sha1Hash[2:])
 	file, err := os.Open(filepath)
 	if err != nil {
 		return nil, fmt.Errorf("unable to open file: %v", err)
@@ -121,7 +128,7 @@ func parseTreeEntries(data []byte) ([]TreeEntry, error) {
 		treeEntries = append(treeEntries, TreeEntry{
 			mode:     Mode(mode),
 			object:   objectType,
-			sha1Hash: sha1Hash,
+			sha1Hash: []byte(sha1Hash),
 			name:     fileName,
 		})
 
@@ -131,42 +138,123 @@ func parseTreeEntries(data []byte) ([]TreeEntry, error) {
 	return treeEntries, nil
 }
 
-func computeHashAndStoreObject(headerBytes []byte, fileContent []byte) (string, error) {
-	objectContent := append(headerBytes, 0)
-	objectContent = append(objectContent, fileContent...)
-
+func computeHashAndStoreObject(content []byte) ([]byte, error) {
 	h := sha1.New()
-	h.Write(objectContent)
+	h.Write(content)
 	shaRaw := h.Sum(nil)
 	sha1Hash := fmt.Sprintf("%x", shaRaw)
 
-	dir := path.Join(".git", "objects", sha1Hash[:2])
+	dir := path.Join(GIT_DIR, "objects", sha1Hash[:2])
 	outputPath := path.Join(dir, sha1Hash[2:])
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create object directory: %v", err)
+		return nil, fmt.Errorf("failed to create object directory: %v", err)
 	}
 
 	// Compress and write the object to file
 	var buf bytes.Buffer
 	compressor := zlib.NewWriter(&buf)
-	_, err := compressor.Write(objectContent)
+	_, err := compressor.Write(content)
 	if err != nil {
-		return "", fmt.Errorf("failed to write to zlib: %v", err)
+		return nil, fmt.Errorf("failed to write to zlib: %v", err)
 	}
 	compressor.Close()
 
 	outputFile, err := os.Create(outputPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to create output file: %v", err)
+		return nil, fmt.Errorf("failed to create output file: %v", err)
 	}
 	defer outputFile.Close()
 
 	_, err = outputFile.Write(buf.Bytes())
 	if err != nil {
-		return "", fmt.Errorf("failed to write compressed content to file: %v", err)
+		return nil, fmt.Errorf("failed to write compressed content to file: %v", err)
 	}
 
-	return sha1Hash, nil
+	return shaRaw, nil
+}
+
+func hashObject(filename string) ([]byte, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, fmt.Errorf("Not able to read file %s: %v", filename, err)
+	}
+	defer file.Close()
+
+	contents, err := io.ReadAll(file)
+	if err != nil {
+		return nil, fmt.Errorf("Not able to read file %s: %v", filename, err)
+	}
+
+	blob := fmt.Sprintf("%s %d%c%s", "blob", len(contents), 0, contents)
+
+	shaCodeRaw, _ := computeHashAndStoreObject([]byte(blob))
+	return shaCodeRaw, nil
+}
+
+func generateTreeFromDir(dirname string) (Tree, error) {
+	var tree Tree
+
+	files, err := os.ReadDir(dirname)
+	if err != nil {
+		return tree, err
+	}
+
+	for _, file := range files {
+		filePath := filepath.Join(dirname, file.Name()) // full path of the file
+		if file.IsDir() {
+			// Skip the .git directory
+			if file.Name() == ".git" {
+				continue
+			}
+
+			newTree, err := generateTreeFromDir(filePath)
+			if err != nil {
+				return tree, err
+			}
+			treeSha, err := storeTreeObject(newTree)
+			if err != nil {
+				return tree, err
+			}
+			tree.entries = append(tree.entries, TreeEntry{
+				mode:     DIR,
+				name:     file.Name(),
+				sha1Hash: treeSha,
+			})
+		} else {
+			shaCode, _ := hashObject(filePath)
+			tree.entries = append(tree.entries, TreeEntry{
+				mode:     REGULAR_FILE,
+				name:     file.Name(),
+				sha1Hash: shaCode,
+			})
+		}
+	}
+
+	return tree, nil
+}
+
+func storeTreeObject(tree Tree) ([]byte, error) {
+	var treeData []byte
+	entries := tree.entries
+	sort.Slice(entries, func(i, j int) bool { return entries[i].name < entries[j].name })
+
+	for _, entry := range entries {
+		treeData = append(treeData, []byte(fmt.Sprintf("%d %s\x00", entry.mode, entry.name))...)
+		treeData = append(treeData, entry.sha1Hash...)
+	}
+
+	treeSize := len(treeData)
+	header := []byte(fmt.Sprintf("tree %d\x00", treeSize))
+
+	var treeBlob []byte
+	treeBlob = append(treeBlob, header...)
+	treeBlob = append(treeBlob, treeData...)
+
+	rawSha, err := computeHashAndStoreObject(treeBlob)
+	if err != nil {
+		return nil, err
+	}
+	return rawSha, nil
 }
 
 func main() {
@@ -177,14 +265,14 @@ func main() {
 
 	switch command := os.Args[1]; command {
 	case "init":
-		for _, dir := range []string{".git", ".git/objects", ".git/refs"} {
+		for _, dir := range []string{GIT_DIR, path.Join(GIT_DIR, "objects"), path.Join(GIT_DIR, "refs")} {
 			if err := os.MkdirAll(dir, 0755); err != nil {
 				fmt.Fprintf(os.Stderr, "Error creating directory: %s\n", err)
 			}
 		}
 
 		headFileContents := []byte("ref: refs/heads/main\n")
-		if err := os.WriteFile(".git/HEAD", headFileContents, 0644); err != nil {
+		if err := os.WriteFile(path.Join(GIT_DIR, "HEAD"), headFileContents, 0644); err != nil {
 			fmt.Fprintf(os.Stderr, "Error writing file: %s\n", err)
 		}
 
@@ -207,24 +295,13 @@ func main() {
 			log.Fatal("Missing file argument for hash-object")
 		}
 		filepath := os.Args[3]
-		fileContent, err := os.ReadFile(filepath)
+		sha1Hash, err := hashObject(filepath)
 		if err != nil {
-			log.Fatalf("Unable to read file %s: %v\n", filepath, err)
+			log.Fatal("Error generating hash-object")
 		}
-
-		fileSize := len(fileContent)
-		header := fmt.Sprintf("blob %d", fileSize)
-		headerBytes := []byte(header)
-
-		sha1Hash, err := computeHashAndStoreObject(headerBytes, fileContent)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		fmt.Printf("%s\n", sha1Hash)
+		fmt.Printf("%x\n", sha1Hash)
 
 	case "ls-tree":
-
 		sha1Hash := os.Args[2]
 		nameOnly := false
 
@@ -251,6 +328,17 @@ func main() {
 				fmt.Printf("%06d %s %x  %s\n", entry.mode, entry.object, entry.sha1Hash, entry.name)
 			}
 		}
+
+	case "write-tree":
+		tree, err := generateTreeFromDir(".")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+		}
+		sha, err := storeTreeObject(tree)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+		}
+		fmt.Printf("%x\n", sha)
 
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command %s\n", command)
