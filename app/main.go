@@ -79,13 +79,14 @@ func main() {
 		fileSize := len(fileContent)
 
 		// Create the header in the format "blob <size> \0"
-		header := fmt.Sprintf("blob %d\\0", fileSize)
+		header := fmt.Sprintf("blob %d", fileSize)
 
 		// Convert the header to a byte slice
 		headerBytes := []byte(header)
 
+		finalBlob := append(headerBytes, 0)
 		// Combine the header and file content to form the final blob
-		finalBlob := append(headerBytes, fileContent...)
+		finalBlob = append(finalBlob, fileContent...)
 
 		h := sha1.New()
 		h.Write(fileContent)
