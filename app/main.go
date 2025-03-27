@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"time"
 )
 
 const (
@@ -219,6 +220,7 @@ func generateTreeFromDir(dirname string) (Tree, error) {
 				mode:     DIR,
 				name:     file.Name(),
 				sha1Hash: treeSha,
+				object:   TREE,
 			})
 		} else {
 			shaCode, _ := hashObject(filePath)
@@ -226,6 +228,7 @@ func generateTreeFromDir(dirname string) (Tree, error) {
 				mode:     REGULAR_FILE,
 				name:     file.Name(),
 				sha1Hash: shaCode,
+				object:   BLOB,
 			})
 		}
 	}
@@ -255,6 +258,26 @@ func storeTreeObject(tree Tree) ([]byte, error) {
 		return nil, err
 	}
 	return rawSha, nil
+}
+
+func generateCommitObject(treeSha1Hash string, message string, username string, email string, parent *string) []byte {
+	timestampNow := time.Now().Unix()
+	_, timeZoneOffset := time.Now().Zone()
+	timeZoneOffsetStr := fmt.Sprintf("%+03d%02d", timeZoneOffset/3600, (timeZoneOffset%3600)/60)
+
+	commitContent := []byte("tree " + treeSha1Hash + "\n")
+
+	if parent != nil {
+		commitContent = append(commitContent, []byte(fmt.Sprintf("parent %s\n", *parent))...)
+	}
+
+	commitContent = append(commitContent, []byte(fmt.Sprintf("author %s <%s> %d %s\n", username, email, timestampNow, timeZoneOffsetStr))...)
+	commitContent = append(commitContent, []byte(fmt.Sprintf("committer %s <%s> %d %s\n\n", username, email, timestampNow, timeZoneOffsetStr))...)
+	commitContent = append(commitContent, []byte(fmt.Sprintf("%s\n", message))...)
+
+	commitObject := []byte(fmt.Sprintf("commit %d\x00", len(commitContent)))
+	commitObject = append(commitObject, commitContent...)
+	return commitObject
 }
 
 func main() {
@@ -339,6 +362,27 @@ func main() {
 			fmt.Fprintln(os.Stderr, err.Error())
 		}
 		fmt.Printf("%x\n", sha)
+	case "commit-tree":
+		var message string
+		var parent string
+		var username string = "Krishna Agrawal"
+		var email string = "imkrishnaagrawal@gmail.com"
+
+		if os.Args[3] == "-m" {
+			message = os.Args[4]
+		} else {
+			message = os.Args[6]
+		}
+
+		if os.Args[3] == "-p" {
+			parent = os.Args[4]
+
+		}
+
+		treeSha1Hash := os.Args[2]
+		commitObject := generateCommitObject(treeSha1Hash, message, username, email, &parent)
+		rawSha, _ := computeHashAndStoreObject(commitObject)
+		fmt.Printf("%x", rawSha)
 
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command %s\n", command)
