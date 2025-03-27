@@ -89,7 +89,7 @@ func main() {
 		finalBlob = append(finalBlob, fileContent...)
 
 		h := sha1.New()
-		h.Write(fileContent)
+		h.Write(finalBlob)
 		shaRaw := h.Sum(nil)
 		shaCode := fmt.Sprintf("%x", shaRaw)
 
